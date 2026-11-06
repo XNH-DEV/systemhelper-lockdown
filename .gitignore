@@ -1,0 +1,23 @@
+# 运行日志（含设备 dump，可能含个人信息，别提交）
+logs/
+*.log
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# APK 样本（本仓库不分发第三方二进制）
+*.apk
+*.apks
+*.xapk
+
+# 反编译产物
+re/
+jadx-out/
+apktool-out/

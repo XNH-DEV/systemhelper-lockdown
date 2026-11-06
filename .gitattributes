@@ -1,0 +1,10 @@
+* text=auto
+
+# 脚本在 Linux/macOS 上直接跑，强制 LF
+*.sh text eol=lf
+*.md text eol=lf
+
+# 图片/二进制
+*.png binary
+*.jpg binary
+*.apk binary

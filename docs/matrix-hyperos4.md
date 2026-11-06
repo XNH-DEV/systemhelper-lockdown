@@ -1,0 +1,138 @@
+# HyperOS 4.0 command matrix (measured)
+
+Test environment: a retail HyperOS 4.0 build (Android 17 / API 37), no root, bootloader locked,
+`ro.debuggable=0`. Every output below is copied verbatim (line breaks included) so you can `grep`
+it directly.
+
+---
+
+## 1. The uninstall / disable ladder
+
+```bash
+pm uninstall -k --user 0 com.mobiletools.systemhelper
+# Failure [only root can delete system app for a particular user]            rc=1
+
+pm uninstall --user 0 com.mobiletools.systemhelper
+# Failure [only root can delete system app for a particular user]            rc=1
+
+cmd package uninstall --user 0 com.mobiletools.systemhelper
+# Failure [only root can delete system app for a particular user]            rc=1
+
+pm hide com.mobiletools.systemhelper
+# java.lang.SecurityException: Access denied, requires: android.permission.MANAGE_USERS
+#   at com.android.server.pm.PackageManagerService$IPackageManagerImpl.setApplicationHiddenSettingAsUser(...)  rc=255
+
+pm disable-user --user 0 com.mobiletools.systemhelper
+# java.lang.SecurityException: Cannot disable system packages.
+#   at com.android.server.pm.PackageManagerServiceImpl.shouldRestrictEnabledSettingsChange(PackageManagerServiceImpl.java:1116)
+#   at com.android.server.pm.PackageManagerService.setEnabledSettings(...)                                   rc=255
+
+pm disable --user 0 com.mobiletools.systemhelper
+# java.lang.SecurityException: Cannot disable system packages.                                              rc=255
+
+pm suspend --user 0 com.mobiletools.systemhelper
+# Package com.mobiletools.systemhelper new suspended state: true                                            rc=0   ✅
+```
+
+## 2. Other variants (none of them work)
+
+```bash
+pm uninstall-system-updates com.mobiletools.systemhelper
+# Success (stdout) but rc=1 — this package has no update layer, the APK sits directly in /system
+
+pm revoke com.mobiletools.systemhelper android.permission.ACCESS_LOCAL_NETWORK
+# rc=0, but dumpsys package still reads granted=true (Android 16+ privileged default grant, cannot be revoked)
+```
+
+## 3. The two additional commands that do succeed
+
+```bash
+pm set-distracting-restriction --flag hide-notifications --user 0 com.mobiletools.systemhelper
+# rc=0 → dumpsys package reads back distractionFlags=2
+
+am force-stop com.mobiletools.systemhelper
+# rc=0 → stopped=true
+```
+
+## 4. Two "command runs but does nothing" traps
+
+```bash
+pm list packages -d
+# rc=0, empty output. On HyperOS 4.0 the pm list subcommands return nothing to shell.
+cmd package list packages -d
+# package:… (normal output) → always enumerate with cmd package
+```
+
+```bash
+am set-standby-bucket com.mobiletools.systemhelper restricted
+am get-standby-bucket com.mobiletools.systemhelper
+# 10 (= ACTIVE, the set did not take effect)
+dumpsys usagestats | grep 'package=com.mobiletools.systemhelper u=0 bucket'
+# bucket=10 reason=f lastRestrictAttempt=+1s490ms lastRestrictReason=f
+# Whatever you set — restricted / rare / working_set — bucket stays 10 and reason stays f (forced)
+```
+
+Conclusion: this lever is dead on this device; do not count on the standby bucket to throttle it.
+
+## 5. Component launch attempts (proof it cannot be started)
+
+```bash
+am startservice -n com.mobiletools.systemhelper/.service.RegisterHelperService
+# Error: Requires permission com.mobiletools.systemhelper.permission      rc=255
+
+am start-foreground-service -n com.mobiletools.systemhelper/.service.RegisterHelperService
+# Error: Requires permission com.mobiletools.systemhelper.permission      rc=255
+
+am start -n com.mobiletools.systemhelper/.Activity.TestActivity
+# java.lang.SecurityException: Permission Denial: starting Intent … requires
+#   com.mobiletools.systemhelper.permission                               rc=255
+
+am broadcast -a android.intent.action.BOOT_COMPLETED -n com.mobiletools.systemhelper/.control.OnBootReceiver
+# java.lang.SecurityException: Permission Denial: not allowed to send broadcast
+#   android.intent.action.BOOT_COMPLETED from pid=…, uid=2000              rc=255
+
+ps -A | grep -i mobiletools      # still empty after all three attempts
+```
+
+> Note: these three failures happen because the **components are protected by a signature-level
+> permission** (shell cannot start them either) — not because we disabled the package.
+> The upside is that third-party apps cannot start it either; the downside is that this kind of test
+> **cannot** prove "the system itself cannot start it". The real evidence is the traffic and alarm
+> data in §6.
+
+## 6. Three observations that do prove "it really did not run"
+
+```bash
+# 1) Alarms: all five of its walarms get dropped
+dumpsys alarm | grep 'motion.*mobiletools\|mobiletools.*walarm' -A3
+# Snapshot: type=ELAPSED_WAKEUP tag=*walarm*:com.mobiletools.systemhelper/.control.SIMStateReceiver
+#           policyWhenElapsed: requester=… app_standby=… device_idle=…
+# Reason=exact_alarm_permission_revoked ← the key line: the system is discarding the alarm
+
+dumpsys alarm | grep -A3 'Restricted packages'
+#   u0a<uid> com.mobiletools.systemhelper      ← force-standby in effect
+
+dumpsys alarm | grep 'Last OP_SCHEDULE_EXACT_ALARM'
+# … u0a<uid>:ignore …                            ← exact alarms denied
+
+# 2) Network policy
+dumpsys netpolicy | grep -A1 'UID=<uid>'
+# UID=<uid> policy=1 (REJECT_METERED_BACKGROUND)
+# UID=<uid> state=null blocked_state={blocked=APP_BACKGROUND|METERED_USER_RESTRICTED,allowed=NONE,…}
+
+# 3) Traffic (methodology in docs/verification.md)
+dumpsys netstats detail | grep -A3 'uid=<uid> set='
+```
+
+## 7. Virtual display (recorded so nobody else wastes time)
+
+```bash
+settings put global overlay_display_devices 720x1600/300     # succeeds, an extra Display 4 appears
+am start --display 4 -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:<pkg>
+# java.lang.SecurityException: Permission Denial: starting Intent … with launchDisplayId=4
+#   at com.android.server.wm.SafeActivityOptions.checkPermissions(SafeActivityOptions.java:303)
+```
+
+Conclusion: without root, shell lacks `INTERNAL_SYSTEM_WINDOW`, so the secondary display can be
+created but **no Activity can be launched into it** — it is an empty screen. "Drive the UI without
+touching the main display" is not achievable from the shell layer.
