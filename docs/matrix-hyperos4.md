@@ -44,6 +44,45 @@ pm revoke com.mobiletools.systemhelper android.permission.ACCESS_LOCAL_NETWORK
 # rc=0, but dumpsys package still reads granted=true (Android 16+ privileged default grant, cannot be revoked)
 ```
 
+## 2.5 Same package name, higher version, empty stub (the signature wall)
+
+The idea: build a harmless stub APK that keeps the package name but carries a higher `versionCode`,
+install it as an "update", and let the system replace the telemetry app with it.
+
+Stub used here: `package com.mobiletools.systemhelper`, `versionCode 35` (retested with
+`999999999`), `minSdk 31` / `targetSdk 34`, no dex, `android:hasCode="false"`, signed with a
+throwaway RSA-2048 key of our own.
+
+| # | Path | Result |
+|---|---|---|
+| 11 | `adb install -r` | `Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.mobiletools.systemhelper signatures do not match newer version; ignoring!]` |
+| 12 | `adb install -r -d` (allow downgrade) | same |
+| 13 | `adb install -r -t` (allow test package) | same |
+| 14 | `pm install -r --user 0` | same |
+| 15 | `pm install -r -t -d --user 0` | same |
+| 16 | `pm install -r -t -d --user 999` (secondary profile) | same |
+| 17 | `cmd package install -r -t -d` | same |
+| 18 | `pm install-create -r -t` (OK) → `pm install-write` (OK) → `pm install-commit` | same, on commit |
+| 19 | `versionCode 999999999` instead of 35, retried via 11–15 | same |
+
+Note that the installer session in #18 is created successfully and even accepts the payload —
+the rejection happens at commit, in signature verification. Version comparison never runs: the
+message is a signature mismatch, not a downgrade refusal.
+
+### Control experiment: is the wall the signature, or the `priv-app` status?
+
+Same pipeline on a package we own (`com.probe.lockdown.test`), installed into `data/app`:
+
+| Step | Action | Result |
+|---|---|---|
+| A | install `com.probe.lockdown.test` vc=1, key **stub** | `Success` |
+| B | install `-r` vc=2, **same** key | `Success` (upgrade path works) |
+| C | install `-r` vc=3, **different** key (`other`) | `Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.probe.lockdown.test signatures do not match newer version; ignoring!]` |
+
+So the upgrade mechanism itself is fine; what blocks the stub is the signing key. To pass, an
+"update" must be signed with the **same private key** as the installed app — here the operator's
+`O=CU` key, which is not obtainable. Without root there is no way to relax `pm`'s signature check.
+
 ## 3. The two additional commands that do succeed
 
 ```bash

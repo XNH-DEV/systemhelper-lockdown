@@ -128,10 +128,19 @@ Every row below was executed on the test device; output is copied verbatim. Shor
 | 8 | `pm set-distracting-restriction --flag hide-notifications --user 0 <pkg>` | 0 | reads back `distractionFlags=2` | **✅ works** |
 | 9 | `pm uninstall-system-updates <pkg>` | 1 (stdout `Success`) | no update layer to remove (APK lives in `/system`) | no effect |
 | 10 | `pm revoke <pkg> android.permission.ACCESS_LOCAL_NETWORK` | 0 | still reads back `granted=true` | cannot revoke (Android 16+ permission, granted to privileged apps by default) |
+| 11 | `adb install -r <stub.apk>` — same package, `versionCode` 35, own key | 1 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE: … signatures do not match newer version; ignoring!` | blocked (signature) |
 
 **Conclusion**: HyperOS 4.0 moved "change a system app's enabled state" behind a private check in
 `PackageManagerServiceImpl`, so the `pm uninstall --user 0` trick that works on HyperOS 2/3 fails
 outright on 4.0. `ro.debuggable=0` (retail build), so `adb root` is not an option either.
+
+**Replacing it with a higher-version stub does not work either.** A same-package APK at
+`versionCode` 35 (retested at `999999999`) signed with our own key is rejected on all nine install
+paths — `adb install -r/-t/-d`, `pm install` with `--user 0` and `--user 999`, `cmd package
+install`, and the `install-create → install-write → install-commit` session route (which does accept
+the payload, then fails at commit). Signature verification runs before any version comparison; see
+[matrix §2.5](docs/matrix-hyperos4.md), including the control experiment that shows the wall is the
+key, not the `priv-app` location.
 
 > Two counter-intuitive traps worth recording:
 > - `pm list packages` (including `-d` / `-e`) returns **rc=0 with zero output**; enumeration must

@@ -94,3 +94,22 @@ DNS 只能拦域名，拦不住：
 - 先把数据落本地、换个网络再补传。
 
 所以 DNS 层只能当**补刀**，主防线还是 appops + netpolicy。
+
+### Q13. 能不能做一个同包名、更高版本的空 APK 把它顶掉？
+
+不行。签名校验排在版本比较前面，自签的「更新包」直接被拒。九条安装路径全试过
+（`adb install -r/-t/-d`、`pm install --user 0`、`--user 999`、`cmd package install`，以及
+`install-create / install-write / install-commit` 会话路径），返回完全一致：
+
+```
+Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.mobiletools.systemhelper
+         signatures do not match newer version; ignoring!]
+```
+
+把 `versionCode` 抬到 `999999999` 也没用；会话路径甚至能把安装会话建起来、payload 写进去，仍然
+卡在 commit 的签名校验。见 [matrix §二·五](matrix-hyperos4.md) 的对照实验：我们自己装的普通包
+（`data/app`）同 key 从 vc1 升到 vc2 成功、换 key 升到 vc3 就报同一条错——挡路的是密钥，不是
+`priv-app` 位置。
+
+要过这关必须有运营商 `O=CU` 的私钥（拿不到）；无 root 也没有任何开关能放宽 `pm` 的签名校验。
+所以结论不变：**顶不掉，只能按住**。

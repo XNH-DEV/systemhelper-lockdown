@@ -45,6 +45,38 @@ pm revoke com.mobiletools.systemhelper android.permission.ACCESS_LOCAL_NETWORK
 # rc=0，但回读 dumpsys package 仍是 granted=true（Android 16+ 特权默认授予，撤不掉）
 ```
 
+## 二·五、同包名 + 更高版本的空壳顶替（签名墙）
+
+思路：做一个无害的空壳 APK，包名保持不变、`versionCode` 抬高，当「更新」装进去，让系统用它替换掉采集组件。
+
+实测用的空壳：`package com.mobiletools.systemhelper`、`versionCode 35`（另用 `999999999` 复测过）、`minSdk 31` / `targetSdk 34`、无 dex、`android:hasCode="false"`、用我们自己的临时 RSA-2048 密钥签名。
+
+| # | 方式 | 结果 |
+|---|---|---|
+| 11 | `adb install -r` | `Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.mobiletools.systemhelper signatures do not match newer version; ignoring!]` |
+| 12 | `adb install -r -d`（允许降级） | 同上 |
+| 13 | `adb install -r -t`（允许测试包） | 同上 |
+| 14 | `pm install -r --user 0` | 同上 |
+| 15 | `pm install -r -t -d --user 0` | 同上 |
+| 16 | `pm install -r -t -d --user 999`（另一个 profile） | 同上 |
+| 17 | `cmd package install -r -t -d` | 同上 |
+| 18 | `pm install-create -r -t`（成功）→ `pm install-write`（成功）→ `pm install-commit` | 提交时同上 |
+| 19 | 把 `versionCode` 换成 `999999999`，重跑 11–15 | 同上 |
+
+注意 #18：安装会话能建成功、payload 也能写进去，**卡在 commit 的签名校验**上。而且报错是签名不匹配、不是「不允许降级」——说明版本比较根本没轮到。
+
+### 对照实验：挡路的是签名，还是 `priv-app` 身份？
+
+用同样的流程，换一个我们自己装的普通包（`com.probe.lockdown.test`，装在 `data/app`）：
+
+| 步骤 | 动作 | 结果 |
+|---|---|---|
+| A | 装 `com.probe.lockdown.test` vc=1，key=**stub** | `Success` |
+| B | `-r` 升到 vc=2，**同一把** key | `Success`（升级链路正常） |
+| C | `-r` 升到 vc=3，**换一把** key（`other`） | `Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.probe.lockdown.test signatures do not match newer version; ignoring!]` |
+
+结论：升级机制本身没问题，卡的是签名。要过这关，「更新包」必须与已装应用**同一张私钥**——这里是运营商 `O=CU` 的密钥，拿不到；无 root 也没有任何开关能放宽 `pm` 的签名校验。
+
 ## 三、验证成功的两条附加命令
 
 ```bash

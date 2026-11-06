@@ -116,3 +116,25 @@ DNS stops hostnames only. It cannot stop:
 - data cached locally first and uploaded later on another network.
 
 So the DNS layer is a **finisher**; the main line of defence remains appops + netpolicy.
+
+### Q13. Can I build an empty APK with the same package name and a higher version to replace it?
+
+No. The signature check runs before the version check, so an "update" signed with your own key is
+rejected outright — nine install paths were tried (`adb install -r/-t/-d`, `pm install` for user 0
+and user 999, `cmd package install`, and the `install-create / install-write / install-commit`
+session route), all returning:
+
+```
+Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.mobiletools.systemhelper
+         signatures do not match newer version; ignoring!]
+```
+
+Bumping `versionCode` to `999999999` changes nothing, and the installer session even accepts the
+payload before failing at commit. The control experiment in
+[matrix §2.5](matrix-hyperos4.md) — same pipeline on a normal `data/app` package we own: vc1→vc2 with
+the same key succeeds, vc3 with a different key fails with the identical error — shows the wall is
+the signing key, not the `priv-app` location.
+
+Passing it would require the operator's private key (`O=CU`), which is not obtainable; without root
+there is no switch that relaxes `pm` signature verification. So the answer stays: you cannot
+replace it, you contain it.

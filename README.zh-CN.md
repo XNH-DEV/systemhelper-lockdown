@@ -106,9 +106,12 @@ appInfoList                                          ← 遍历 PackageManager�
 | 8 | `pm set-distracting-restriction --flag hide-notifications --user 0 <pkg>` | 0 | 回读 `distractionFlags=2` | **✅ 成功** |
 | 9 | `pm uninstall-system-updates <pkg>` | 1（stdout `Success`） | 无更新可卸（APK 直接在 `/system`） | 无效果 |
 | 10 | `pm revoke <pkg> android.permission.ACCESS_LOCAL_NETWORK` | 0 | 回读仍 `granted=true` | 撤不掉（Android 16+ 新权限，特权 App 默认授予） |
+| 11 | `adb install -r <空壳.apk>`（同包名，`versionCode` 35，自签 key） | 1 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE: … signatures do not match newer version; ignoring!` | 被拦（签名） |
 
 **结论**：HyperOS 4.0 把「系统应用启用状态」的修改权限收进了 `PackageManagerServiceImpl` 的私有判定，社区在 HyperOS 2/3 上成功的 `pm uninstall --user 0` 在 4.0 上直接失效。
 `ro.debuggable=0`（零售版），所以 `adb root` 也不用想。
+
+**「同包名 + 更高版本的空壳顶替」同样不通。** 我们把一个包名相同、`versionCode` 35（另用 `999999999` 复测）的自签空壳，按九条安装路径全跑了一遍——`adb install -r/-t/-d`、`pm install --user 0` 与 `--user 999`、`cmd package install`，以及 `install-create → install-write → install-commit` 会话路径（会话能建、payload 能写，**卡在 commit 的签名校验**）——全部返回同一句签名不匹配。版本比较根本没轮上；详见 [matrix §二·五](docs/zh-CN/matrix-hyperos4.md) 里的对照实验（同 key 升级成功、换 key 必败）。
 
 > 顺带记录两个反直觉的坑：
 > - `pm list packages`（含 `-d/-e`）在本机 **rc=0 但零输出**，枚举必须换成 `cmd package list packages`。
