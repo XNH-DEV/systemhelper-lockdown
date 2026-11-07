@@ -1,0 +1,12 @@
+UID stats:
+  Pending bytes: 0
+  History since boot:
+  ident=[{type=1, ratType=COMBINED, wifiNetworkKey="LAB-AP"wpa2-psk, metered=false, defaultNetwork=true, oemManaged=OEM_NONE, subId=-1, transports={1}}] uid=10100 set=DEFAULT tag=0x0
+    NetworkStatsHistory: bucketDuration=7200
+      st=1793973600 rb=1024 rp=8 tb=2048 tp=16 op=0
+  ident=[{type=1, ratType=COMBINED, wifiNetworkKey="LAB-AP"wpa2-psk, metered=false, defaultNetwork=true, oemManaged=OEM_NONE, subId=-1, transports={1}}] uid=1000 set=DEFAULT tag=0x0
+    NetworkStatsHistory: bucketDuration=7200
+      st=1793973600 rb=456 rp=6 tb=0 tp=0 op=0
+  ident=[{type=0, ratType=20, metered=true, defaultNetwork=true, oemManaged=OEM_NONE, subId=3, transports={0}}] uid=10132 set=DEFAULT tag=0x0
+    NetworkStatsHistory: bucketDuration=7200
+      st=1793973600 rb=8192 rp=64 tb=4096 tp=32 op=0

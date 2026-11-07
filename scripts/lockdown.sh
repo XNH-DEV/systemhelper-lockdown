@@ -1,154 +1,219 @@
 #!/usr/bin/env bash
-# SystemHelper Lockdown — 无 root 处置脚本（默认目标 com.mobiletools.systemhelper）
+# scripts/lockdown.sh — 无 root 处置（v2.1 重构版）
 #
 # 用法:
-#   bash lockdown.sh                # 直接处置
-#   bash lockdown.sh --dry-run      # 只打印将执行的命令
-#   bash lockdown.sh --no-suspend   # 跳过 pm suspend（有些 ROM 上挂起会导致系统弹窗）
-#   bash lockdown.sh --pkg <包名> --serial <序列号>
+#   bash scripts/lockdown.sh                 # 真改设备（先自动快照）
+#   bash scripts/lockdown.sh --dry-run       # 只打印将执行的命令，一条写命令都不发
+#   bash scripts/lockdown.sh --no-suspend    # 跳过 pm suspend（有些 ROM 挂起会弹窗）
+#   bash scripts/lockdown.sh --pkg <包名> --serial <序列号> --user 0
+#   bash scripts/lockdown.sh --force         # 显式越过默认保护名单（危险，会二次确认）
 #
-# 只碰 PKG 这一个包；默认白名单会拒绝 com.qualcomm.* / com.android.* / com.miui.* / com.google.*
-# 除非显式加 --force。
+# 相对旧版修复（v2.0 §2.1 点名的缺陷）:
+#   * run() 不再无条件 return 0 —— 每条命令的真实 rc 与回读结果决定 SUCCESS/FAILED/UNKNOWN
+#   * 每步状态写入 execution.tsv，收尾给四值汇总与整体判定
+#   * 先快照后动刀（rollback 才有原始值可依）
+set -uo pipefail
 
-set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/common.sh
+. "$HERE/lib/common.sh"
+# shellcheck source=lib/adb.sh
+. "$HERE/lib/adb.sh"
+# shellcheck source=lib/package.sh
+. "$HERE/lib/package.sh"
+# shellcheck source=lib/permissions.sh
+. "$HERE/lib/permissions.sh"
+# shellcheck source=lib/appops.sh
+. "$HERE/lib/appops.sh"
+# shellcheck source=lib/network.sh
+. "$HERE/lib/network.sh"
+# shellcheck source=lib/process.sh
+. "$HERE/lib/process.sh"
+# shellcheck source=lib/snapshot.sh
+. "$HERE/lib/snapshot.sh"
 
-PKG="com.mobiletools.systemhelper"
-SERIAL="${SERIAL:-}"
+PKG="${PKG:-com.mobiletools.systemhelper}"
+USER_ID="${USER_ID:-0}"
+LOG_ROOT="${LOG_ROOT:-$HERE/../logs}"
 DRY=0
 SUSPEND=1
 FORCE=0
-LOG_ROOT="./logs"
-ADB="${ADB:-adb}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --pkg) PKG="$2"; shift 2 ;;
-    --serial) SERIAL="$2"; shift 2 ;;
-    --dry-run) DRY=1; shift ;;
+    --pkg)        PKG="$2"; shift 2 ;;
+    --user)       USER_ID="$2"; shift 2 ;;
+    --serial)     SH_SERIAL="$2"; shift 2 ;;
+    --dry-run)    DRY=1; shift ;;
     --no-suspend) SUSPEND=0; shift ;;
-    --force) FORCE=1; shift ;;
-    --log-dir) LOG_ROOT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
-    *) echo "未知参数: $1" >&2; exit 2 ;;
+    --force)      FORCE=1; shift ;;
+    --log-dir)    LOG_ROOT="$2"; shift 2 ;;
+    -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
+    *) sh_die "未知参数: $1" 2 ;;
   esac
 done
 
-case "$PKG" in
-  com.qualcomm.*|com.android.*|com.miui.*|com.google.*|android)
-    if [ "$FORCE" != 1 ]; then
-      echo "拒绝处置 $PKG：命中默认保护名单。确认要动它请加 --force。" >&2
-      exit 3
-    fi ;;
-esac
-
-TS="$(date +%Y%m%d-%H%M%S)"
-LOGDIR="$LOG_ROOT/$TS"
-
-A() { if [ -n "$SERIAL" ]; then "$ADB" -s "$SERIAL" "$@"; else "$ADB" "$@"; fi; }
-S() { A shell "$@"; }
-
-resolve_uid() {
-  local u
-  u="$(A shell "cmd package list packages -U $PKG" 2>&1 | grep -oE 'uid:[0-9]+' | head -n1 | tr -dc '0-9')"
-  [ -z "$u" ] && u="$(A shell "dumpsys package $PKG" 2>&1 | grep -m1 -oE 'userId=[0-9]+' | tr -dc '0-9')"
-  [ -z "$u" ] && u="$(A shell "dumpsys package $PKG" 2>&1 | grep -m1 -oE 'uid=[0-9]+' | tr -dc '0-9')"
-  printf '%s' "$u"
-}
-
-say() { printf '%s\n' "$*"; }
-
-run() {                       # run <说明> <设备端 shell 命令...>
-  local desc="$1"; shift
-  local cmd="$*"
-  printf '\n[%s]\n  $ adb shell %s\n' "$desc" "$cmd"
-  [ "$DRY" = 1 ] && { printf '  (dry-run, 未执行)\n'; return 0; }
+# 执行器：dry-run 只打印；真跑则按回读判状态
+x() {  # x <动作名> <设备端命令> [期望回读的关键词]
+  local action="$1" cmd="$2" expect="${3:-}"
+  if [ "$DRY" = 1 ]; then
+    printf '  [dry-run] adb shell %s\n' "$cmd"
+    sh_state "$action" SKIPPED "dry-run"
+    return 0
+  fi
   local out rc
-  out="$(S "$cmd" 2>&1)"; rc=$?
-  if [ -n "$out" ]; then printf '%s\n' "$out" | head -n 6 | sed 's/^/    /'; fi
-  printf '  -> rc=%s\n' "$rc"
+  out="$(sh_shell "$cmd")"; rc=$?
+  if [ -n "$out" ]; then printf '    %s\n' "$(printf '%s' "$out" | head -3)"; fi
+  if [ "$rc" -ne 0 ]; then
+    sh_state "$action" FAILED "rc=$rc ${out%%$'\n'*}"
+    return 1
+  fi
+  case "$out" in
+    *Exception*|*"Permission denial"*|*"Access denied"*|*Failure*|*"Unknown operation"*|*"Cannot "*|*"only root"*)
+      sh_state "$action" FAILED "${out%%$'\n'*}"
+      return 1 ;;
+  esac
+  if [ -n "$expect" ] && ! printf '%s' "$out" | grep -q "$expect"; then
+    # 命令没报错但回读对不上 → 不报成功
+    sh_state "$action" UNKNOWN "回读未含 '$expect'"
+    return 1
+  fi
+  sh_state "$action" SUCCESS "${out%%$'\n'*}"
   return 0
 }
 
-# ---------- 0. 前置检查 ----------
-say "== SystemHelper Lockdown =="
-say "target : $PKG"
-say "adb    : $ADB${SERIAL:+ ($SERIAL)}"
-say "dry-run: $DRY"
+main() {
+  local uid
+  sh_pick_device
+  guard_target
 
-if [ "$DRY" != 1 ]; then
-  if ! A get-state >/dev/null 2>&1; then
-    say "✗ adb 连不上设备。先跑 adb devices 确认。" >&2; exit 4
+  if [ "$DRY" != 1 ]; then
+    sh_snap_init "$LOG_ROOT" "$PKG" "$USER_ID"
+    sh_snap_device
+    sh_snap_package "$PKG" "$USER_ID"
+    sh_snap_perms "$PKG" "$USER_ID"
+    uid="$(sh_pkg_uid "$PKG")"
+    sh_snap_appops "$PKG" "${uid:-0}"
+    sh_snap_network "${uid:-0}"
+    sh_log "已快照 → $SH_SNAP（rollback.sh 依赖它）"
+  else
+    uid="$(sh_pkg_uid "$PKG")"
+    sh_log "== dry-run：以下命令都不会执行 =="
   fi
-fi
 
-PATHS="$(A shell "pm path $PKG" 2>&1 | tr -d '\r')"
-if ! printf '%s' "$PATHS" | grep -q '^package:'; then
-  say "✗ 设备上没有 $PKG（pm path 为空）。" >&2; exit 5
-fi
-say "path   : $(printf '%s' "$PATHS" | head -n1)"
+  sh_log ""
+  sh_log "目标: $PKG  user=$USER_ID  uid=${uid:-?}"
 
-UID_="$(resolve_uid)"
-if [ -z "$UID_" ]; then
-  say "✗ 解析不到 uid（dumpsys package 里没有 userId=）。" >&2; exit 6
-fi
-say "uid    : ${UID_:-<未知>}"
+  # ---------- L0 执行层 ----------
+  sh_log ""
+  sh_log "== L0 执行层：让它起不来 =="
+  x "force-stop" "am force-stop --user $USER_ID $PKG"
+  x "set-inactive" "am set-inactive --user $USER_ID $PKG true"
+  if [ "$SUSPEND" = 1 ]; then
+    x "suspend" "pm suspend --user $USER_ID $PKG" "suspended state: true"
+  else
+    sh_state "suspend" SKIPPED "--no-suspend"
+  fi
 
-# ---------- 1. 存档（改之前先留证据） ----------
-if [ "$DRY" != 1 ]; then
-  mkdir -p "$LOGDIR"
-  A shell "dumpsys package $PKG" > "$LOGDIR/dumpsys-package.txt"  2>&1
-  A shell "cmd appops get $PKG"  > "$LOGDIR/appops-before.txt"    2>&1
-  A shell "cmd package list packages -d" > "$LOGDIR/pkg-disabled-before.txt" 2>&1
-  A shell "cmd package list packages -e" > "$LOGDIR/pkg-enabled-before.txt"  2>&1
-  A shell "dumpsys netstats detail"      > "$LOGDIR/netstats-before.txt"     2>&1
-  say "存档   : $LOGDIR/"
-fi
+  # ---------- L1 时钟层 ----------
+  sh_log ""
+  sh_log "== L1 时钟层：掐掉精确定时 =="
+  if [ -n "$uid" ]; then
+    x "appops:SCHEDULE_EXACT_ALARM" "cmd appops set --uid $uid SCHEDULE_EXACT_ALARM ignore"
+  fi
 
-# ---------- 2. 权限层 ----------
-for P in READ_PHONE_STATE ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION \
-         ACCESS_BACKGROUND_LOCATION READ_EXTERNAL_STORAGE BLUETOOTH_CONNECT; do
-  run "revoke android.permission.$P" "pm revoke $PKG android.permission.$P"
-done
-# Android 16+ 新权限：多半撤不掉（rc=0 但值不变），试一下无妨
-run "revoke ACCESS_LOCAL_NETWORK（可能无效）" "pm revoke $PKG android.permission.ACCESS_LOCAL_NETWORK"
+  # ---------- L2 后台执行 ----------
+  sh_log ""
+  sh_log "== L2 后台执行层 =="
+  for op in RUN_ANY_IN_BACKGROUND RUN_IN_BACKGROUND START_FOREGROUND WAKE_LOCK; do
+    if [ -n "$uid" ]; then x "appops:$op" "cmd appops set --uid $uid $op ignore"; fi
+  done
 
-# ---------- 3. 执行层（appops） ----------
-for OP in RUN_ANY_IN_BACKGROUND RUN_IN_BACKGROUND START_FOREGROUND WAKE_LOCK POST_NOTIFICATION SCHEDULE_EXACT_ALARM; do
-  run "appops $OP=ignore" "cmd appops set $PKG $OP ignore"
-done
+  # ---------- L3 权限层（必须在 clear 之后，这里没有 clear，正常顺序即可） ----------
+  sh_log ""
+  sh_log "== L3 权限层：撤销 + 锁定（USER_FIXED，防系统重算覆盖） =="
+  local perm
+  for perm in $SH_DANGEROUS_PERMS; do
+    if [ "$DRY" = 1 ]; then
+      printf '  [dry-run] pm revoke --user %s %s android.permission.%s && pm set-permission-flags ... user-set user-fixed\n' "$USER_ID" "$PKG" "$perm"
+      sh_state "perm:$perm" SKIPPED "dry-run"
+      continue
+    fi
+    local o
+    o="$(sh_perm_revoke_fixed "$PKG" "$USER_ID" "$perm")"
+    if [ "$o" = "OK" ] && sh_perm_verify_revoked "$PKG" "$USER_ID" "$perm"; then
+      sh_state "perm:$perm" SUCCESS "granted=false+USER_FIXED"
+    else
+      sh_state "perm:$perm" FAILED "回读=$(sh_perm_runtime_granted "$PKG" "$USER_ID" "$perm")"
+    fi
+  done
+  # 已知撤不掉的，明确记录
+  if [ "$DRY" != 1 ]; then
+    o="$(sh_perm_revoke_fixed "$PKG" "$USER_ID" ACCESS_LOCAL_NETWORK)"
+    if sh_perm_verify_revoked "$PKG" "$USER_ID" ACCESS_LOCAL_NETWORK; then
+      sh_state "perm:ACCESS_LOCAL_NETWORK" SUCCESS "granted=false"
+    else
+      # 系统行为：REVOKE_WHEN_REQUESTED，shell 无撤销通道 → UNKNOWN 而不是 FAILED
+      sh_state "perm:ACCESS_LOCAL_NETWORK" UNKNOWN "UNSUPPORTED(REVOKE_WHEN_REQUESTED)，非本项目失败"
+    fi
+  fi
 
-# ---------- 4. 网络层 ----------
-if [ -n "$UID_" ]; then
-  run "netpolicy 拉黑后台流量" "cmd netpolicy add restrict-background-blacklist $UID_"
-else
-  say "! uid 未知，跳过 netpolicy"
-fi
+  # ---------- L4 网络层 ----------
+  sh_log ""
+  sh_log "== L4 网络层：后台流量在 netd 层拒绝 =="
+  if [ -n "$uid" ]; then
+    x "netpolicy:blacklist" "cmd netpolicy add restrict-background-blacklist $uid"
+    if [ "$DRY" != 1 ]; then
+      if sh_net_blacklisted "$uid"; then
+        sh_state "netpolicy:verify" SUCCESS "uid $uid 在黑名单"
+      else
+        sh_state "netpolicy:verify" UNKNOWN "回读未见 uid"
+      fi
+    fi
+  else
+    sh_state "netpolicy:blacklist" SKIPPED "uid 未知"
+  fi
 
-# ---------- 5. 挂起 + 通知限制 ----------
-if [ "$SUSPEND" = 1 ]; then
-  run "系统级挂起" "pm suspend --user 0 $PKG"
-fi
-run "隐藏通知（distraction restriction）" "pm set-distracting-restriction --flag hide-notifications --user 0 $PKG"
+  # ---------- L5 通知层 ----------
+  sh_log ""
+  sh_log "== L5 通知层 =="
+  x "distracting-restriction" "pm set-distracting-restriction --user $USER_ID --flag hide-notifications --flag hide-from-suggestions $PKG"
+  if [ -n "$uid" ]; then x "appops:POST_NOTIFICATION" "cmd appops set --uid $uid POST_NOTIFICATION ignore"; fi
 
-# ---------- 6. 强停（必须最后做，把 stopped 标记打上） ----------
-run "待机标记" "am set-inactive $PKG true"
-run "强停" "am force-stop $PKG"
-
-# ---------- 7. 打印结果 ----------
-if [ "$DRY" != 1 ]; then
-  printf '\n== 处置后状态 ==\n'
-  A shell "dumpsys package $PKG" 2>&1 | grep -E 'stopped=|suspended=|distractionFlags=' | sed 's/^ */  /' | head -n 2
-  A shell "cmd appops get $PKG" 2>&1 | grep -E 'RUN_ANY_IN_BACKGROUND|RUN_IN_BACKGROUND|START_FOREGROUND|WAKE_LOCK|POST_NOTIFICATION|SCHEDULE_EXACT_ALARM' | sed 's/^ */  /'
-  A shell "cmd netpolicy list restrict-background-blacklist" 2>&1 | sed 's/^ */  /'
-  A shell "ps -A | grep -i ${PKG##*.}" 2>&1 | sed 's/^ */  /' | head -n 3
-fi
-
-cat <<EOF
+  # ---------- 收尾 ----------
+  sh_log ""
+  if [ "$DRY" != 1 ]; then
+    sh_snap_after "$PKG" "$USER_ID" "${uid:-0}"
+    sh_log "处置后 dump → $SH_SNAP/after_state/"
+  fi
+  sh_summary
+  local rc=$?
+  cat <<EOF
 
 下一步:
-  1) bash verify.sh            # 出验证数据（默认采样 300 秒）
-  2) 可选：设置 → 应用 → 应用管理 → SystemHelper → 应用联网
-     把 数据-卡1 / 数据-卡2 / WLAN / 后台运行时联网 四个开关全关（唯一能挡住"前台联网"的无 root 手段）
-  3) 回滚: bash rollback.sh
+  bash scripts/verify.sh              # 分层验证（A–F 六层）
+  bash scripts/rollback.sh            # 按快照精确回滚
+  bash scripts/restriction/restriction.sh audit   # 只读复核
 
+注意:
+  * 本方案没有卸载任何东西；/system 里的 APK 仍在。
+  * 重启会重置 stopped 标记（suspended 保留）→ 每次开机重跑一次 force-stop。
+  * MIUI「联网控制」四个开关 adb 写不进去，需要手点（README §4.6）。
 EOF
+  return $rc
+}
+
+guard_target() {
+  if sh_is_protected "$PKG"; then
+    if [ "$FORCE" != 1 ]; then
+      sh_die "$PKG 命中保护名单（如确要处置请加 --force，并自行承担后果）" 3
+    fi
+    sh_warn "$PKG 命中保护名单，--force 已开启"
+    if [ "$DRY" != 1 ]; then
+      sh_confirm_exact "FORCE $PKG" || sh_die "确认串不匹配，已中止" 5
+    fi
+  fi
+  sh_pkg_exists "$PKG" || sh_die "设备上没有 $PKG" 4
+}
+
+main "$@"

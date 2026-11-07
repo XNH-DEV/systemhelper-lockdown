@@ -1,0 +1,3 @@
+java.lang.SecurityException: Cannot disable system packages.
+	at com.android.server.pm.PackageManagerServiceImpl.shouldRestrictEnabledSettingsChange(PackageManagerServiceImpl.java:1116)
+	at com.android.server.pm.PackageManagerServiceImpl.setEnabled(PackageManagerServiceImpl.java:988)

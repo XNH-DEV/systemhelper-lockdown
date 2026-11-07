@@ -164,3 +164,61 @@ am start --display 4 -a android.settings.APPLICATION_DETAILS_SETTINGS -d package
 ```
 
 结论：无 root 时 shell 没有 `INTERNAL_SYSTEM_WINDOW`，副屏能建但**没法把 Activity 投进去**，等于空屏。想「不动主屏操作 UI」这条路在 shell 层走不通。
+
+---
+
+## 八、真正走得通的一条路：PackageInstaller API（2026-11-07 补充）
+
+第一节里那串命令全部失败，根因只有一个：`pm uninstall` 走的是 `PackageManagerShellCommand`，而
+HyperOS 4.0 把那句 `only root can delete system app for a particular user` 的判断**写在这条命令里**，
+不在 PackageManagerService 里。换成 `PackageInstaller.uninstall()` 发同一个卸载请求（Shizuku 系 GUI
+就是这么干的），就不受这道检查管。
+
+同一台机器、同一版本、未 root、BL 未解锁，实测：
+
+```text
+# 工具：Canta（io.github.samolego.canta）+ Shizuku（moe.shizuku.privileged.api）
+# 两个都不需要 root；Shizuku 本身是用无线 adb 拉起来的
+
+# 卸载前
+$ adb shell cmd package list packages | grep -i mobiletools
+package:com.mobiletools.systemhelper
+
+# 在 Canta 里对 user 0 执行卸载之后
+$ adb shell cmd package list packages | grep -i mobiletools
+（空）
+
+$ adb shell cmd package list packages -u | grep -i mobiletools
+package:com.mobiletools.systemhelper     # 系统仍记得它 → 可恢复，不用重新下载
+```
+
+卸载后的状态：
+
+```text
+$ adb shell dumpsys package com.mobiletools.systemhelper | grep -m1 'User 0:'
+    User 0: ceDataInode=-1 deDataInode=-1 … installed=false hidden=false suspended=true … stopped=true notLaunched=true
+
+$ adb shell cmd package path com.mobiletools.systemhelper
+（空）
+```
+
+| 字段 | 值 | 含义 |
+|---|---|---|
+| `installed` | `false` | user 0 上已不安装 |
+| `ceDataInode` / `deDataInode` | `-1` | 应用数据已删 |
+| `codePath` | 仍是 `/system/priv-app/com.mobiletools.systemhelper` | APK 留在系统镜像里 |
+
+影响面核对：拿前一天存的 497 个包快照，跟卸载后的设备做全量 diff —— **只少了这一个包**
+（`com.mobiletools.systemhelper`），新增的只有 Canta 本体和一条无关的应用更新；
+`com.qualcomm.qti.services.systemhelper`、`com.miui.guardprovider` 都还在。
+
+恢复：
+
+```bash
+adb shell cmd package install-existing --user 0 com.mobiletools.systemhelper
+```
+
+对本仓库结论的修正：**「无 root 就不能卸载」这句话说错了**。准确的说法要窄一档——
+**`pm` 命令行卸不掉，`PackageInstaller` API 卸得掉。**
+如果你更想「留着这个包但把它按住」，`scripts/lockdown.sh` 那套 L1–L5 仍然是对的选择
+（OTA 安全、一条命令回滚）。

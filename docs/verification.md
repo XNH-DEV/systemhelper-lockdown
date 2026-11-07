@@ -125,3 +125,24 @@ zeros above could all be explained away as "the accounting is not running".
   netd rejections, not real traffic.
 - `stopped` flips from true to false inside your window → something started it; check the latest
   trigger records in `dumpsys alarm` / `dumpsys jobscheduler` before saying OK.
+
+---
+
+## 7. Appendix: metric 5 — removal (added 2026-11-07)
+
+All four metrics above answer "is it being held down". There is a fifth that needs no sampling
+window at all, because it is a state rather than a behaviour:
+
+```bash
+dumpsys package com.mobiletools.systemhelper | grep -m1 'User 0:'
+#  User 0: ceDataInode=-1 deDataInode=-1 … installed=false … stopped=true notLaunched=true
+```
+
+`installed=false` (plus `-1` inodes) means the package is gone for that user; there is nothing left
+to wake up, so alarm/netpolicy/netstats measurements become unnecessary. Two rules still apply:
+
+- read `cmd package list packages -u` as well — with `-u` the package still appears, which is how
+  you know it is restorable rather than wiped;
+- diff the **whole** package list against a pre-change snapshot; otherwise you cannot prove you
+  did not take something else with it (see
+  [matrix §8](matrix-hyperos4.md#8-the-path-that-does-work-packageinstaller-api-added-2026-11-07)).

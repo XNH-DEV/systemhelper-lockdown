@@ -1,0 +1,18 @@
+Packages:
+  Package [com.mobiletools.systemhelper] (10e47dc):
+    appId=10100
+    sharedUser=SharedUserSetting{591f327 com.mobiletools.systemhelper.uid/10100}
+    codePath=/system/priv-app/com.mobiletools.systemhelper
+    versionCode=34 minSdk=31 targetSdk=34
+    versionName=4.0.0-20260729
+    flags=[ SYSTEM HAS_CODE ALLOW_CLEAR_USER_DATA ]
+    privateFlags=[ PRIVILEGED ]
+    User 0: ceDataInode=8137 deDataInode=6628 pccCeDataInode=0 pccDeDataInode=0 installed=true hidden=false suspended=false appLockEnabled=false distractionFlags=0 stopped=true notLaunched=false enabled=3 instant=false virtual=false quarantined=false
+      installReason=0
+      dataDir=/data/user/0/com.mobiletools.systemhelper
+
+Shared users:
+  SharedUser [com.mobiletools.systemhelper.uid] (591f327):
+    appId=10100
+    Packages
+      PackageSetting{10e47dc com.mobiletools.systemhelper/10100}

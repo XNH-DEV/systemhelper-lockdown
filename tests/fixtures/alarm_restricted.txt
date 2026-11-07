@@ -1,0 +1,7 @@
+Alarm manager stats (dumpsys alarm):
+  Restricted packages:
+      u0a100 com.mobiletools.systemhelper
+      u0a191 com.xiaomi.simactivate.service
+  Last OP_SCHEDULE_EXACT_ALARM: [1000:allow, 2000:default, u0a83:default, u0a100:ignore, u0a128:default]
+  Recent problems:
+    (none)

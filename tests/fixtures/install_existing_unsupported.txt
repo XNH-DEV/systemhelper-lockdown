@@ -1,0 +1,1 @@
+Error: java.lang.IllegalArgumentException: Unknown command: install-existing

@@ -2,6 +2,8 @@
 
 > 把 HyperOS 4.0 上删不掉的运营商预装采集组件，按到「零进程、零联网、零通知、零闹钟」的一套可复现处置手册。
 
+> **补充（2026-11-07）**：`pm` 命令行确实卸不掉它，但换成 `PackageInstaller` API（Canta + Shizuku，同样不需要 root）**可以真的卸载**，实测 `installed=false`、数据已删、只掉了这一个包。详见 [matrix 第八节](docs/zh-CN/matrix-hyperos4.md#八真正走得通的一条路packageinstaller-api2026-11-07-补充)。
+
 **目标包**：`com.mobiletools.systemhelper`（显示名 SystemHelper）——中国联通 OMA-DM 设备自注册 / 遥测组件，烧在 `/system/priv-app`，签名 `O=CU`。
 
 **环境**：一台零售版 HyperOS 4.0 设备（Android 17 / API 37），未 root、未解 BL。
@@ -201,6 +203,11 @@ android.permission.BLUETOOTH_CONNECT
 ### 三步
 
 ```bash
+# 0) 先只读：动之前把证据摊开
+bash scripts/preflight.sh          # 环境 / 保护名单 / 依赖面
+bash scripts/audit.sh --no-sample  # 全量只读审计 → logs/<ts>/audit-report.md
+bash scripts/snapshot.sh           # 完整快照（rollback 依赖它）
+
 # 1) 先干跑一遍，看它准备改什么（不会动设备）
 bash scripts/lockdown.sh --dry-run
 
@@ -210,6 +217,22 @@ bash scripts/lockdown.sh
 # 3) 出验证数据（默认采样 300 秒，可 --seconds 60 缩短）
 bash scripts/verify.sh
 ```
+
+### 分层入口（v2.1）
+
+`scripts/restriction/restriction.sh` 把处置系统拆成七个显式模式，**不点名就不执行**：
+
+```bash
+bash scripts/restriction/restriction.sh audit     # 只读（默认）
+bash scripts/restriction/restriction.sh plan      # 只出方案，不改设备
+bash scripts/restriction/restriction.sh restrict  # L1–L5 冻结
+bash scripts/restriction/restriction.sh disable   # 尝试停用（HyperOS 4.0 会拒）
+bash scripts/restriction/restriction.sh uninstall # 尝试用户级卸载（需精确确认串）
+bash scripts/restriction/restriction.sh verify
+bash scripts/restriction/restriction.sh restore
+```
+
+每个动作只给四种结果：`SUCCESS / FAILED / SKIPPED / UNKNOWN`；**没回读验证过的一律不记 SUCCESS**。
 
 多设备时加 `--serial <序列号>`，换包名时加 `--pkg <包名>`（脚本默认带白名单，不让它去动 `com.qualcomm.qti.services.systemhelper` 这类同名高通组件）。
 
@@ -259,12 +282,14 @@ pm grant com.mobiletools.systemhelper android.permission.READ_PHONE_STATE   # �
 ```
 
 > 本方案**没有卸载任何东西**，所以 `cmd package install-existing` 用不上；`pm grant` 若被拒（特权权限），重启一次通常由系统重新默认授予。
+>
+> **若你已经用 Canta 之类把它卸了**（`installed=false`）：下面这串 `appops/netpolicy` 回滚对已卸载的包没有意义，直接忽略；要恢复只需 `cmd package install-existing --user 0 com.mobiletools.systemhelper`。
 
 ---
 
 ## 8. 边界：这套方案做不到什么
 
-1. **没卸载**。APK 仍在 `/system/priv-app`，`pm path` 照样能查到。要真删只有两条路：root 后 `mount -o rw,remount /system` 删目录；或解 BL 换 ROM。本机 `ro.debuggable=0`，连 `adb root` 都不可用。
+1. **没卸载**。APK 仍在 `/system/priv-app`，`pm path` 照样能查到。想彻底删掉：`pm` 命令行被 HyperOS 4.0 拦住，但 **`PackageInstaller` API 能过**（Canta + Shizuku，无需 root，实测成功）；再往下才是 root 后 `mount -o rw,remount /system` 删目录或解 BL 换 ROM。本机 `ro.debuggable=0`，连 `adb root` 都不可用。
 2. **重启会打回一部分**。`suspend` 会存活，但 `stopped` 会被开机流程重置（实测重启后 baseline 是 `stopped=false`）→ 建议每次重启后补跑一次 `am force-stop`。
 3. **OTA 会还原**。系统升级覆盖 `/system` 后，权限可能重新 `GRANTED_BY_DEFAULT`，appops / netpolicy 也可能被重置 → 升级后整套重跑。
 4. **IMEI 这类特权读取挡不住**。`READ_PRIVILEGED_PHONE_STATE` 是 install-time 权限，撤不掉；只能靠「不给它执行机会」+「不给它网」。
@@ -301,6 +326,26 @@ pm grant com.mobiletools.systemhelper android.permission.READ_PHONE_STATE   # �
 - [docs/zh-CN/matrix-hyperos4.md](docs/zh-CN/matrix-hyperos4.md) —— HyperOS 4.0 处置命令实测矩阵（含异常原文）
 - [docs/zh-CN/verification.md](docs/zh-CN/verification.md) —— 验证方法学：netstats 口径、采样时长、误判来源
 - [docs/zh-CN/faq.md](docs/zh-CN/faq.md) —— 常见问题与反例
+
+工程文档（v2.0 / v2.1）：
+
+| 文档 | 内容 |
+|---|---|
+| [ARCHITECTURE.md](docs/zh-CN/ARCHITECTURE.md) | 分层架构、模块边界、数据流、四值状态机 |
+| [THREAT_MODEL.md](docs/zh-CN/THREAT_MODEL.md) | 资产、威胁主体、信任边界、残余风险 |
+| [PRIVACY_AUDIT.md](docs/zh-CN/PRIVACY_AUDIT.md) | 五级证据分级、采集字段、离线积压机制、开关语义 |
+| [NETWORK_ANALYSIS.md](docs/zh-CN/NETWORK_ANALYSIS.md) | 端点、触发条件、观测口径、封锁层次 |
+| [PERMISSION_ANALYSIS.md](docs/zh-CN/PERMISSION_ANALYSIS.md) | 权限三层、可撤销性、顺序坑 |
+| [COMPATIBILITY.md](docs/zh-CN/COMPATIBILITY.md) | 跨版本能力矩阵与命令差异 |
+| [COMPATIBILITY-hyperos4.md](docs/zh-CN/COMPATIBILITY-hyperos4.md) | 本机逐条原始报错 |
+| [RECOVERY.md](docs/zh-CN/RECOVERY.md) | 故障恢复（搞坏了怎么救） |
+| [RESTORE_GUIDE.md](docs/zh-CN/RESTORE_GUIDE.md) | 正常回滚（按快照恢复原值，不擅自授权） |
+| [RESTRICTION_GUIDE.md](docs/zh-CN/RESTRICTION_GUIDE.md) | 五层处置：原理/条件/命令/预期/恢复/版本差异 |
+| [DISABLE_GUIDE.md](docs/zh-CN/DISABLE_GUIDE.md) | 停用：为什么 HyperOS 4.0 直接拒绝 |
+| [UNINSTALL_GUIDE.md](docs/zh-CN/UNINSTALL_GUIDE.md) | 用户级卸载：13 项检查与硬墙 |
+| [UNINSTALL_RISK_MATRIX.md](docs/zh-CN/UNINSTALL_RISK_MATRIX.md) | 卸载风险逐项打分（本包定级 CAUTION） |
+| [TEST_PLAN.md](docs/zh-CN/TEST_PLAN.md) | 20 个 mock 场景与 CI |
+| [SECURITY_LIMITATIONS.md](docs/zh-CN/SECURITY_LIMITATIONS.md) | 自我限制清单与不可宣称的结论 |
 
 English:
 

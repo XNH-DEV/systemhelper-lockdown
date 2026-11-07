@@ -1,0 +1,13 @@
+Uid mode: COARSE_LOCATION: allow
+READ_PHONE_STATE: allow; time=+2d10h27m9s683ms ago
+BLUETOOTH_CONNECT: allow; time=+6h26m10s887ms ago
+POST_NOTIFICATION: default
+WAKE_LOCK: default
+GET_USAGE_STATS: default; rejectTime=+2d20h32m5s529ms ago
+ACTIVATE_VPN: default
+RUN_IN_BACKGROUND: default
+RUN_ANY_IN_BACKGROUND: default; time=+42d5h18m53s528ms ago
+START_FOREGROUND: default
+SCHEDULE_EXACT_ALARM: default
+SYSTEM_ALERT_WINDOW: default; rejectTime=+42d4h34m30s696ms ago
+MANAGE_EXTERNAL_STORAGE: default; rejectTime=+152d13h30m15s763ms ago

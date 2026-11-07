@@ -1,0 +1,7 @@
+Device Policy Manager State:
+  mHasFeature=true
+  mIsUpToDate=true
+  Active Admins:
+    com.mobiletools.systemhelper/.control.SystemHelperDeviceAdmin
+      admin=com.mobiletools.systemhelper/.control.SystemHelperDeviceAdmin
+      uid=10100

@@ -110,3 +110,20 @@ adb shell dumpsys netstats detail > T1.txt
 - 目标 uid 条目一直是 0，但全机条目也是 0 → 统计没工作，重采。
 - 增量全是 `rp/tp` 而 `rb/tb` 为 0 → 只有 SYN/RST，可能是被 netd 拒绝产生的失败计数，不是真流量。
 - 采样窗口里 `stopped` 从 true 变 false → 有东西把它拉起来了，先查 `dumpsys alarm` / `dumpsys jobscheduler` 的最近触发记录，别急着说 OK。
+
+---
+
+## 七、附录：口径五 —— 卸载（2026-11-07 补充）
+
+前面四个口径都在回答「它是不是被按住了」。还有第五个口径根本不需要采样窗口，因为它是一个**状态**而不是**行为**：
+
+```bash
+dumpsys package com.mobiletools.systemhelper | grep -m1 'User 0:'
+#  User 0: ceDataInode=-1 deDataInode=-1 … installed=false … stopped=true notLaunched=true
+```
+
+`installed=false`（加上 inode 为 `-1`）表示这个用户下已经没这个包，没有东西可以被叫醒，闹钟/网络策略/流量三项采样都可以免了。但仍守两条：
+
+- 一定要同时看 `cmd package list packages -u` —— 带 `-u` 还能看到它，说明是「可从镜像恢复」而不是「被彻底抹掉」；
+- 一定要拿**全量**包清单跟改动前的快照做 diff，否则你没法证明自己没顺手带走别的东西
+  （对照 [matrix 第八节](matrix-hyperos4.md#八真正走得通的一条路packageinstaller-api2026-11-07-补充)）。

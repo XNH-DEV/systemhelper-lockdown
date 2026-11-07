@@ -1,8 +1,9 @@
 # SystemHelper Lockdown
 
 > A reproducible, root-free containment procedure for an operator (China Unicom) OMA-DM
-> telemetry component that ships inside `/system/priv-app` on HyperOS 4.0 and **cannot be
-> uninstalled or disabled** without root.
+> telemetry component that ships inside `/system/priv-app` on HyperOS 4.0. The `pm` CLI cannot
+> uninstall or disable it; the `PackageInstaller` API can (measured — see
+> [matrix §8](docs/matrix-hyperos4.md#8-the-path-that-does-work-packageinstaller-api-added-2026-11-07)).
 
 **Target package**: `com.mobiletools.systemhelper` (display name *SystemHelper*) — the China
 Unicom OMA-DM device self-registration / telemetry component, baked into `/system/priv-app`,
@@ -35,8 +36,16 @@ State after containment (measured on the test device, 11m09s sampling window):
 | Component launches | 3 attempts, all rejected |
 | Background traffic | `REJECT_METERED_BACKGROUND` + `APP_BACKGROUND` at the netd layer |
 
-**It is not uninstalled.** HyperOS 4.0 blocks every root-free uninstall/disable path with three
-different exceptions — see [§3](#3-the-hard-walls-on-hyperos-40-measured-matrix).
+**Two different jobs, two different outcomes.**
+
+- **Uninstall** (`installed=false`, data gone): the `pm` CLI is blocked by three different
+  exceptions, but the same uninstall issued through the `PackageInstaller` API — Canta over
+  Shizuku, no root — **works**. Measured 2026-11-07 on the test device: exactly one package gone
+  out of a 497-package snapshot, the only additions being Canta itself and an unrelated app
+  update; `com.qualcomm.qti.services.systemhelper` and `com.miui.guardprovider` untouched.
+  Details: [docs/matrix-hyperos4.md §8](docs/matrix-hyperos4.md#8-the-path-that-does-work-packageinstaller-api-added-2026-11-07).
+- **Containment** (the L1–L5 lockdown below): for when you would rather keep the package in
+  place than remove it — OTA-safe, one-command rollback.
 
 ---
 
@@ -242,6 +251,11 @@ sinkhole, local DNS filtering, or a hosts file).
 ### Three steps
 
 ```bash
+# 0) read-only: prove what is there before touching anything
+bash scripts/preflight.sh          # environment / guards / dependency surface
+bash scripts/audit.sh --no-sample  # full read-only audit → logs/<ts>/audit-report.md
+bash scripts/snapshot.sh           # full state snapshot (rollback depends on it)
+
 # 1) dry run first — prints what it would change, touches nothing
 bash scripts/lockdown.sh --dry-run
 
@@ -251,6 +265,24 @@ bash scripts/lockdown.sh
 # 3) produce verification data (300 s sampling by default; --seconds 60 to shorten)
 bash scripts/verify.sh
 ```
+
+### Layered entry point (v2.1)
+
+`scripts/restriction/restriction.sh` exposes the disposal system as seven explicit modes — nothing
+runs unless you name it:
+
+```bash
+bash scripts/restriction/restriction.sh audit     # read-only (default)
+bash scripts/restriction/restriction.sh plan      # print the plan, change nothing
+bash scripts/restriction/restriction.sh restrict  # L1–L5 freeze
+bash scripts/restriction/restriction.sh disable   # attempt disable (blocked on HyperOS 4.0)
+bash scripts/restriction/restriction.sh uninstall # attempt per-user uninstall (blocked, needs CONFIRM)
+bash scripts/restriction/restriction.sh verify
+bash scripts/restriction/restriction.sh restore
+```
+
+Every action reports one of `SUCCESS / FAILED / SKIPPED / UNKNOWN`; a command is never marked
+`SUCCESS` unless the state is read back and matches.
 
 With several devices attached add `--serial <serial>`; for a different package add `--pkg <name>`
 (the script carries a deny-list so it will not touch lookalikes such as Qualcomm's
@@ -372,3 +404,23 @@ English (primary):
 - [docs/zh-CN/matrix-hyperos4.md](docs/zh-CN/matrix-hyperos4.md)
 - [docs/zh-CN/verification.md](docs/zh-CN/verification.md)
 - [docs/zh-CN/faq.md](docs/zh-CN/faq.md)
+
+项目工程文档（v2.0/v2.1，中文）：
+
+| 文档 | 内容 |
+|---|---|
+| [ARCHITECTURE.md](docs/zh-CN/ARCHITECTURE.md) | 分层架构、模块边界、数据流、状态机 |
+| [THREAT_MODEL.md](docs/zh-CN/THREAT_MODEL.md) | 资产、威胁主体、信任边界、残余风险 |
+| [PRIVACY_AUDIT.md](docs/zh-CN/PRIVACY_AUDIT.md) | 五级证据分级、采集字段、离线积压机制 |
+| [NETWORK_ANALYSIS.md](docs/zh-CN/NETWORK_ANALYSIS.md) | 端点、触发条件、观测口径、封锁层次 |
+| [PERMISSION_ANALYSIS.md](docs/zh-CN/PERMISSION_ANALYSIS.md) | 权限三层、可撤销性、顺序坑 |
+| [COMPATIBILITY.md](docs/zh-CN/COMPATIBILITY.md) | 跨版本能力矩阵与命令差异 |
+| [COMPATIBILITY-hyperos4.md](docs/zh-CN/COMPATIBILITY-hyperos4.md) | 本机逐条原始报错 |
+| [RECOVERY.md](docs/zh-CN/RECOVERY.md) | 故障恢复（搞坏了怎么救） |
+| [RESTORE_GUIDE.md](docs/zh-CN/RESTORE_GUIDE.md) | 正常回滚（按快照恢复原值） |
+| [RESTRICTION_GUIDE.md](docs/zh-CN/RESTRICTION_GUIDE.md) | 五层处置：原理/条件/命令/预期/恢复 |
+| [DISABLE_GUIDE.md](docs/zh-CN/DISABLE_GUIDE.md) | 停用：为什么 HyperOS 4.0 拒绝 |
+| [UNINSTALL_GUIDE.md](docs/zh-CN/UNINSTALL_GUIDE.md) | 用户级卸载：13 项检查与硬墙 |
+| [UNINSTALL_RISK_MATRIX.md](docs/zh-CN/UNINSTALL_RISK_MATRIX.md) | 卸载风险逐项打分 |
+| [TEST_PLAN.md](docs/zh-CN/TEST_PLAN.md) | 20 个 mock 场景与 CI |
+| [SECURITY_LIMITATIONS.md](docs/zh-CN/SECURITY_LIMITATIONS.md) | 自我限制清单与不可宣称的结论 |

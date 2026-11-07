@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  shell-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling (shellcheck + shfmt)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          curl -fsSL -o /tmp/shfmt \
+            https://github.com/mvdan/sh/releases/download/v3.8.0/shfmt_v3.8.0_linux_amd64
+          chmod +x /tmp/shfmt
+          sudo mv /tmp/shfmt /usr/local/bin/shfmt
+          shellcheck --version | head -2
+          shfmt --version
+
+      - name: bash -n（全量语法检查）
+        run: |
+          set -euo pipefail
+          n=0
+          for f in scripts/*.sh scripts/lib/*.sh scripts/restriction/*.sh scripts/restriction/lib/*.sh \
+            tests/*.sh tests/lib/*.sh; do
+            [ -f "$f" ] || continue
+            bash -n "$f" || { echo "::error file=$f::bash -n 失败"; exit 1; }
+            n=$((n + 1))
+          done
+          echo "bash -n 通过 $n 个文件"
+
+      - name: shellcheck（--severity=warning）
+        run: |
+          set -euo pipefail
+          # tests 是我们自己的代码，严格阻塞；已知误报就地 shellcheck disable
+          shellcheck --severity=warning --shell=bash tests/*.sh tests/lib/*.sh
+          # 业务脚本同样按 warning 阻塞（若与并行改造冲突，请在该行加 disable 注释而不是放水）
+          shellcheck --severity=warning --shell=bash \
+            scripts/*.sh scripts/lib/*.sh scripts/restriction/*.sh scripts/restriction/lib/*.sh
+
+      - name: shfmt（差异即失败）
+        run: |
+          set -euo pipefail
+          shfmt -d -i 2 tests/*.sh tests/lib/*.sh
+
+      - name: shfmt（scripts 只报告，不阻塞并行改造）
+        run: |
+          shfmt -d -i 2 scripts/*.sh scripts/lib/*.sh scripts/restriction/*.sh \
+            scripts/restriction/lib/*.sh || true
+
+      - name: 离线测试（mock adb，不接真机）
+        run: |
+          chmod +x tests/mock_adb.sh tests/run_tests.sh
+          bash tests/run_tests.sh
+
+      - name: bats（若仓库带 .bats 用例则额外跑）
+        if: hashFiles('tests/**/*.bats') != ''
+        run: |
+          sudo apt-get install -y -qq bats
+          bats tests/ || true
+
+      - name: Guard — CI 里不许出现真实设备连接命令
+        run: |
+          if grep -rInE 'adb (connect|tcpip|pair) ' scripts tests --include='*.sh' | grep -v mock_adb.sh; then
+            echo "::error::发现真实设备连接命令，CI 不允许"
+            exit 1
+          fi
+          echo "无真实设备连接命令"

@@ -1,0 +1,18 @@
+Uid mode: COARSE_LOCATION: ignore
+READ_CONTACTS: ignore
+POST_NOTIFICATION: ignore
+CAMERA: ignore
+RECORD_AUDIO: ignore
+READ_PHONE_STATE: ignore
+READ_EXTERNAL_STORAGE: ignore
+BLUETOOTH_CONNECT: ignore
+GET_USAGE_STATS: ignore; rejectTime=+2d20h32m5s529ms ago
+ACTIVATE_VPN: ignore
+RUN_IN_BACKGROUND: ignore
+RUN_ANY_IN_BACKGROUND: ignore; time=+42d5h18m53s528ms ago
+START_FOREGROUND: ignore
+WAKE_LOCK: ignore
+SCHEDULE_EXACT_ALARM: ignore
+SYSTEM_ALERT_WINDOW: default; rejectTime=+42d4h34m30s696ms ago
+MANAGE_EXTERNAL_STORAGE: default; rejectTime=+152d13h30m15s763ms ago
+MIUIOP(10008): allow; time=+2h54m51s701ms ago

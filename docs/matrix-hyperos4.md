@@ -175,3 +175,62 @@ am start --display 4 -a android.settings.APPLICATION_DETAILS_SETTINGS -d package
 Conclusion: without root, shell lacks `INTERNAL_SYSTEM_WINDOW`, so the secondary display can be
 created but **no Activity can be launched into it** — it is an empty screen. "Drive the UI without
 touching the main display" is not achievable from the shell layer.
+
+---
+
+## 8. The path that does work: PackageInstaller API (added 2026-11-07)
+
+Everything in §1 fails for one reason: `pm uninstall` is `PackageManagerShellCommand`, and HyperOS
+4.0 puts the `only root can delete system app for a particular user` guard **inside that command**,
+not inside the package manager service. The same uninstall issued through
+`PackageInstaller.uninstall()` — what a Shizuku-backed GUI does — is not gated by that check.
+
+Measured on the same device, same build, no root, bootloader locked:
+
+```text
+# tool: Canta (io.github.samolego.canta) + Shizuku (moe.shizuku.privileged.api)
+# both root-free; Shizuku itself was started over wireless adb
+
+# before
+$ adb shell cmd package list packages | grep -i mobiletools
+package:com.mobiletools.systemhelper
+
+# after uninstalling for user 0 from Canta's UI
+$ adb shell cmd package list packages | grep -i mobiletools
+(empty)
+
+$ adb shell cmd package list packages -u | grep -i mobiletools
+package:com.mobiletools.systemhelper     # still known to the system → restorable, nothing to download
+```
+
+State afterwards:
+
+```text
+$ adb shell dumpsys package com.mobiletools.systemhelper | grep -m1 'User 0:'
+    User 0: ceDataInode=-1 deDataInode=-1 … installed=false hidden=false suspended=true … stopped=true notLaunched=true
+
+$ adb shell cmd package path com.mobiletools.systemhelper
+(empty)
+```
+
+| Field | Value | Meaning |
+|---|---|---|
+| `installed` | `false` | no longer installed for user 0 |
+| `ceDataInode` / `deDataInode` | `-1` | app data deleted |
+| `codePath` | still `/system/priv-app/com.mobiletools.systemhelper` | the APK stays in the image |
+
+Scope check: the 497-package snapshot taken the day before, diffed against the device right after
+the uninstall — **exactly one** package gone (`com.mobiletools.systemhelper`); the only additions
+were Canta itself and an unrelated app update. `com.qualcomm.qti.services.systemhelper` and
+`com.miui.guardprovider` are untouched.
+
+Restore:
+
+```bash
+adb shell cmd package install-existing --user 0 com.mobiletools.systemhelper
+```
+
+Consequence for this repository: the blanket claim *"cannot be uninstalled without root"* is wrong
+as stated. What is true is narrower — **the `pm` CLI cannot do it; the `PackageInstaller` API can.**
+The L1–L5 lockdown in `scripts/lockdown.sh` is still the right choice when you would rather keep
+the package in place than remove it (OTA-safe, one-command rollback).

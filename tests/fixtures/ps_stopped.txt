@@ -1,0 +1,5 @@
+USER           PID  PPID        VSZ    RSS WCHAN            ADDR S NAME                       
+root             1     0   11060012   5900 0                   0 S init
+root             2     0          0      0 0                   0 S [kthreadd]
+system         832     1   14012344  48211 0                   0 S system_server
+u0_a138       5102   832    9102336  40122 0                   0 S com.tencent.mm

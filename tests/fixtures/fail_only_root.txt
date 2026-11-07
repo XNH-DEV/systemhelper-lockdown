@@ -1,0 +1,1 @@
+Failure [only root can delete system app for a particular user]
